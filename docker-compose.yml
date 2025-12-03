@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  iptv-tuner:
+    build: .
+    image: ghcr.io/unvoidf/iptv-tuner:latest
+    container_name: iptv-tuner
+    restart: unless-stopped
+    # Optional: Prevent Watchtower from updating this container (useful for local builds)
+    # Remove this section if you don't use Watchtower or want auto-updates
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    ports:
+      - "5004:5004"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=5004
+      # BASE_URL Configuration:
+      # - Use 'http://localhost:5004' if Plex/Jellyfin is on the same machine (Host Mode)
+      # - Use LAN IP (e.g., 'http://192.168.1.50:5004') if running in Bridge Mode or on separate devices
+      - BASE_URL=http://localhost:5004
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
