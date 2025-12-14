@@ -43,7 +43,7 @@ async def update_m3u_task():
     try:
         logger.info("Running scheduled M3U update...")
         user_agent = config.get("user_agent")
-        selected_categories = config.get("selected_categories")
+        selected_categories = config.get("selected_categories") or []
         
         channels = await m3u_downloader.download_and_parse(
             m3u_url=m3u_url,
@@ -52,6 +52,16 @@ async def update_m3u_task():
         )
         
         current_channels = channels
+        
+        # Cleanup orphan categories (categories that no longer exist in M3U)
+        available_categories = set(m3u_downloader.get_all_categories())
+        valid_categories = [cat for cat in selected_categories if cat in available_categories]
+        
+        if len(valid_categories) < len(selected_categories):
+            orphan_count = len(selected_categories) - len(valid_categories)
+            logger.info(f"Cleaned up {orphan_count} orphan categories from settings")
+            config.update({"selected_categories": valid_categories})
+        
         logger.info(f"Scheduled update complete: {len(current_channels)} channels loaded")
         
     except Exception as e:
@@ -214,7 +224,12 @@ async def stream_channel(channel_id: str):
     """
     Stream a specific channel (proxy to IPTV source).
     Implements kill-switch: terminates any active stream before starting new one.
+    Falls back to offline test card if stream is unavailable.
     """
+    from core.streamer import StreamUnavailableError
+    from core.fallback import fallback_manager
+    from fastapi.responses import StreamingResponse
+    
     # Find channel
     channel = next((ch for ch in current_channels if ch.channel_id == channel_id), None)
     
@@ -238,6 +253,22 @@ async def stream_channel(channel_id: str):
             read_timeout_seconds=read_timeout
         )
         
+    except StreamUnavailableError as e:
+        # Serve fallback video for unavailable streams (403, 404, etc.)
+        logger.info(f"Serving fallback for: {channel.name} (status={e.status_code})")
+        
+        if fallback_manager.is_available():
+            return StreamingResponse(
+                fallback_manager.stream_fallback(),
+                media_type="video/mpeg"  # MPEG-TS for Plex compatibility
+            )
+        else:
+            # No fallback available, return HTTP error
+            raise HTTPException(
+                status_code=503,
+                detail="Stream temporarily unavailable"
+            )
+    
     except Exception as e:
         logger.error(f"Stream error for {channel_id}: {e}", exc_info=True)
         

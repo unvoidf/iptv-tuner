@@ -6,6 +6,7 @@ Docker-based IPTV proxy that emulates HDHomeRun for safe single-connection strea
 
 - **Kill-Switch Protection**: Automatically terminates old streams before starting new ones
 - **HDHomeRun Emulation**: Recognized by Plex as a local tuner device
+- **Fallback Video**: Shows "Stream Not Available" when channels are offline (e.g., match-time only channels)
 - **Async Streaming**: Non-blocking I/O with httpx for performance
 - **Stall Protection**: Configurable read timeout prevents hung connections
 - **Category Filtering**: Select which M3U groups to include
@@ -101,6 +102,7 @@ iptv-tuner/
 │   ├── core/
 │   │   ├── downloader.py    # M3U parser
 │   │   ├── streamer.py      # Kill-switch streaming
+│   │   ├── fallback.py      # Fallback video generator
 │   │   └── xmltv.py         # EPG generator
 │   ├── api/
 │   │   └── routes.py        # Management API

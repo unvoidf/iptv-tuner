@@ -14,3 +14,5 @@ build/
 .idea/
 .vscode/
 data/settings.json
+tests/test_settings.json
+sample_data/

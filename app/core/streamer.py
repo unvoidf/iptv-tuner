@@ -4,11 +4,20 @@ Ensures only one active IPTV stream at a time using async lock.
 """
 import asyncio
 import logging
-from typing import Optional, AsyncIterator
+from typing import Optional, AsyncIterator, Tuple, Union
 import httpx
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
+
+
+class StreamUnavailableError(Exception):
+    """Raised when IPTV stream returns 4xx/5xx error."""
+    
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"Stream unavailable ({status_code}): {message}")
 
 
 class StreamManager:
@@ -20,6 +29,7 @@ class StreamManager:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._active_client: Optional[httpx.AsyncClient] = None
+        self._active_response = None
         self._active_url: Optional[str] = None
     
     async def stream_channel(
@@ -28,9 +38,12 @@ class StreamManager:
         user_agent: str,
         kill_delay_ms: int = 1000,
         read_timeout_seconds: int = 30
-    ) -> StreamingResponse:
+    ) -> Union[StreamingResponse, None]:
         """
         Stream a channel with kill-switch protection.
+        
+        Probes the stream first, raises StreamUnavailableError if stream
+        is not available (4xx/5xx) BEFORE returning StreamingResponse.
         
         Args:
             channel_url: IPTV stream URL
@@ -40,6 +53,9 @@ class StreamManager:
         
         Returns:
             StreamingResponse with video content
+            
+        Raises:
+            StreamUnavailableError: If stream returns 4xx/5xx error
         """
         async with self._lock:
             # Terminate any active stream
@@ -68,12 +84,45 @@ class StreamManager:
                     follow_redirects=True
                 )
                 
-                # Stream response with dynamic content type
+                # PROBE THE STREAM FIRST - this is the key change
+                # We initiate the connection and check status BEFORE creating StreamingResponse
+                try:
+                    self._active_response = await self._active_client.send(
+                        self._active_client.build_request(
+                            "GET",
+                            channel_url,
+                            headers={"User-Agent": user_agent}
+                        ),
+                        stream=True
+                    )
+                    self._active_response.raise_for_status()
+                    
+                    logger.info(
+                        f"Stream connected: {self._active_response.status_code}, "
+                        f"Content-Type: {self._active_response.headers.get('content-type', 'unknown')}"
+                    )
+                    
+                except httpx.HTTPStatusError as e:
+                    status = e.response.status_code
+                    await e.response.aclose()
+                    await self._cleanup_client()
+                    
+                    if 400 <= status < 500:
+                        logger.warning(f"Stream unavailable ({status}): {channel_url[:60]}...")
+                    else:
+                        logger.error(f"Server error ({status}): {channel_url[:60]}...")
+                    
+                    raise StreamUnavailableError(status, str(e))
+                
+                # Stream is available, return the StreamingResponse
                 return StreamingResponse(
-                    self._proxy_stream_async(channel_url, user_agent),
+                    self._stream_chunks(),
                     media_type="video/mpeg"  # Plex Live TV compatible
                 )
                 
+            except StreamUnavailableError:
+                # Re-raise for caller to handle
+                raise
             except Exception as e:
                 logger.error(f"Error starting stream: {e}", exc_info=True)
                 await self._cleanup_client()
@@ -81,6 +130,13 @@ class StreamManager:
     
     async def _terminate_active_stream(self) -> None:
         """Force close the active HTTP client and connection."""
+        if self._active_response:
+            try:
+                await self._active_response.aclose()
+            except Exception:
+                pass
+            self._active_response = None
+            
         if self._active_client:
             logger.warning(f"Terminating active stream: {self._active_url}")
             try:
@@ -91,63 +147,47 @@ class StreamManager:
                 self._active_client = None
                 self._active_url = None
     
-    async def _proxy_stream_async(
-        self,
-        url: str,
-        user_agent: str
-    ) -> AsyncIterator[bytes]:
+    async def _stream_chunks(self) -> AsyncIterator[bytes]:
         """
-        Async generator that yields video chunks from IPTV source.
-        
-        Args:
-            url: Stream URL
-            user_agent: User-Agent header
+        Async generator that yields video chunks from already-connected stream.
         
         Yields:
-            Video data chunks (8KB each)
+            Video data chunks (64KB each)
         """
-        if not self._active_client:
-            raise RuntimeError("No active client available")
+        if not self._active_response:
+            raise RuntimeError("No active response available")
         
         try:
-            async with self._active_client.stream(
-                "GET",
-                url,
-                headers={"User-Agent": user_agent}
-            ) as response:
-                response.raise_for_status()
-                
-                logger.info(
-                    f"Stream connected: {response.status_code}, "
-                    f"Content-Type: {response.headers.get('content-type', 'unknown')}"
-                )
-                
-                chunk_count = 0
-                # Use larger chunks for better buffering (especially 4K)
-                async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
-                    if chunk:
-                        chunk_count += 1
-                        if chunk_count % 100 == 0:  # Log every ~6MB
-                            logger.debug(f"Streamed {chunk_count} chunks (~{chunk_count * 64}KB)")
-                        yield chunk
-                
-                logger.info(f"Stream completed successfully ({chunk_count} chunks)")
-                
+            chunk_count = 0
+            # Use larger chunks for better buffering (especially 4K)
+            async for chunk in self._active_response.aiter_bytes(chunk_size=65536):
+                if chunk:
+                    chunk_count += 1
+                    if chunk_count % 100 == 0:  # Log every ~6MB
+                        logger.debug(f"Streamed {chunk_count} chunks (~{chunk_count * 64}KB)")
+                    yield chunk
+            
+            logger.info(f"Stream completed successfully ({chunk_count} chunks)")
+            
         except httpx.TimeoutException as e:
             logger.error(f"Stream timeout: {e}")
-            raise
         except httpx.RequestError as e:
             logger.error(f"Stream request error: {e}")
-            raise
         except Exception as e:
             logger.error(f"Unexpected stream error: {e}", exc_info=True)
-            raise
         finally:
             # Cleanup on stream end
             await self._cleanup_client()
     
     async def _cleanup_client(self) -> None:
         """Close and reset active client."""
+        if self._active_response:
+            try:
+                await self._active_response.aclose()
+            except Exception:
+                pass
+            self._active_response = None
+            
         if self._active_client:
             try:
                 await self._active_client.aclose()

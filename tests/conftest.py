@@ -6,5 +6,6 @@ from pathlib import Path
 app_path = Path(__file__).parent.parent / "app"
 sys.path.insert(0, str(app_path))
 
-# Set config path to a temp file for tests
-os.environ["CONFIG_PATH"] = "test_settings.json"
+# Set config path to a temp file for tests (in tests/ directory)
+test_config_path = Path(__file__).parent / "test_settings.json"
+os.environ["CONFIG_PATH"] = str(test_config_path)

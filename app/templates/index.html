@@ -176,11 +176,11 @@
                 </div>
 
                 <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <label v-for="category in categories" :key="category"
+                    <label v-for="category in categories" :key="category.name"
                         class="category-item cursor-pointer hover:bg-gray-700 transition-colors">
-                        <input type="checkbox" :value="category" v-model="settings.selected_categories"
+                        <input type="checkbox" :value="category.name" v-model="settings.selected_categories"
                             class="w-4 h-4" />
-                        <span>{{ category }}</span>
+                        <span>{{ category.display }}</span>
                     </label>
                 </div>
             </div>
@@ -229,6 +229,9 @@
                 allSelected() {
                     return this.categories.length > 0 &&
                         this.settings.selected_categories.length === this.categories.length;
+                },
+                categoryNames() {
+                    return this.categories.map(c => c.name);
                 },
                 statusClass() {
                     return this.statusType === 'success'
@@ -332,7 +335,7 @@
                     if (this.allSelected) {
                         this.settings.selected_categories = [];
                     } else {
-                        this.settings.selected_categories = [...this.categories];
+                        this.settings.selected_categories = this.categoryNames;
                     }
                 }
             },

@@ -52,9 +52,17 @@ class M3UDownloader:
     GROUP_TITLE_PATTERN = re.compile(r'group-title="([^"]*)"', re.IGNORECASE)
     CHANNEL_NAME_PATTERN = re.compile(r',\s*(.+)$')
     
+    # Content type emojis
+    CONTENT_TYPE_EMOJI = {
+        "live": "📡",
+        "movie": "🎬",
+        "series": "📺"
+    }
+    
     def __init__(self):
         self.channels: List[M3UChannel] = []
         self.all_categories: set = set()
+        self.category_types: Dict[str, str] = {}  # category -> content type
     
     async def download_and_parse(
         self,
@@ -120,6 +128,7 @@ class M3UDownloader:
         """Parse M3U content and populate channels list."""
         self.channels.clear()
         self.all_categories.clear()
+        self.category_types.clear()
         
         lines = content.splitlines()
         channel_counter = 1
@@ -178,6 +187,12 @@ class M3UDownloader:
                 
                 self.channels.append(channel)
                 self.all_categories.add(group_title)
+                
+                # Detect and store content type for this category
+                content_type = self._detect_content_type(url)
+                if group_title not in self.category_types:
+                    self.category_types[group_title] = content_type
+                
                 channel_counter += 1
             
             i += 1
@@ -190,3 +205,37 @@ class M3UDownloader:
     def get_all_categories(self) -> List[str]:
         """Get sorted list of all discovered categories."""
         return sorted(list(self.all_categories))
+    
+    def get_categories_with_types(self) -> List[Dict[str, str]]:
+        """
+        Get categories with content type indicators.
+        
+        Returns:
+            List of dicts with 'name', 'type', and 'display' (name + emoji)
+        """
+        result = []
+        for category in sorted(self.all_categories):
+            content_type = self.category_types.get(category, "live")
+            emoji = self.CONTENT_TYPE_EMOJI.get(content_type, "📡")
+            result.append({
+                "name": category,
+                "type": content_type,
+                "display": f"{category} {emoji}"
+            })
+        return result
+    
+    @staticmethod
+    def _detect_content_type(url: str) -> str:
+        """
+        Detect content type from URL pattern.
+        
+        Returns:
+            'movie', 'series', or 'live'
+        """
+        url_lower = url.lower()
+        if "/movie/" in url_lower:
+            return "movie"
+        elif "/series/" in url_lower:
+            return "series"
+        else:
+            return "live"

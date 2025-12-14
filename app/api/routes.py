@@ -81,12 +81,12 @@ async def update_settings(settings: SettingsUpdate) -> Dict[str, str]:
 
 
 @router.get("/api/categories")
-async def get_categories() -> List[str]:
-    """Get list of all available categories from current M3U."""
+async def get_categories() -> List[Dict[str, str]]:
+    """Get list of all available categories with content type indicators."""
     if not m3u_downloader:
         return []
     
-    return m3u_downloader.get_all_categories()
+    return m3u_downloader.get_categories_with_types()
 
 
 @router.post("/api/refresh")
